@@ -1,0 +1,13 @@
+{
+  "name": "ts-translate-tests",
+  "version": "1.0.0",
+  "private": true,
+  "description": "TS 翻译专家 · jsdom 冒烟测试（在 Node 里直接加载单文件页面并断言核心行为）",
+  "scripts": {
+    "test": "node smoke.js"
+  },
+  "devDependencies": {
+    "jsdom": "^24.0.0"
+  },
+  "license": "MIT"
+}
