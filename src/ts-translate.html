@@ -88,6 +88,9 @@ label.fld b{color:var(--text);font-weight:600}
 .grid3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:0 20px}
 .row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .hint{font-size:12px;color:var(--muted);margin-top:4px}
+/* 备份状态行：运行时读出的文件夹 / 最近一次备份信息（多行），非静态说明文案 */
+.bk-status{font-size:12px;color:var(--muted);margin-top:6px;line-height:1.7}
+.bk-status b{color:var(--text)}
 /* 配置页：供应商官网入口 */
 .cfg-site{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin-top:10px;padding:9px 13px;background:var(--primary-light);border:1px solid #CFE3D6;border-radius:8px;font-size:13px;color:var(--primary-dark)}
 .cfg-site a{display:inline-flex;align-items:center;gap:3px;color:var(--primary-dark);font-weight:600;text-decoration:none;padding:1px 6px;border-radius:5px;border:1px solid transparent;transition:background .15s,border-color .15s}
@@ -554,7 +557,7 @@ progress{width:100%;height:14px}
     </div>
     <div class="titles">
       <h1>TS翻译专家</h1>
-      <div class="sub">TS Translation Expert <code id="ver">1.1.0</code></div>
+      <div class="sub">TS Translation Expert <code id="ver">1.2.0</code></div>
     </div>
     <div class="stats">
       <div class="stat" title="累计成功完成的翻译次数（本机统计）"><b id="stat-translate">0</b><span>翻译次数</span></div>
@@ -722,6 +725,20 @@ progress{width:100%;height:14px}
         <button class="btn ghost" id="btn-test-config">测试连接</button>
       </div>
       <div id="cfg-test-result"><pre class="code" id="cfg-test-out"></pre></div>
+    </div>
+
+    <!-- ================= 备份与恢复 ================= -->
+    <div class="card" id="card-backup">
+      <h2>备份与恢复</h2>
+      <div class="desc">备份配置页 / 术语库 / 规则库 / TS 翻译页；点「立即备份」生成，<b>导入＝清空覆盖</b>。</div>
+      <div class="row">
+        <button class="btn" id="btn-bk-pick">选择备份文件夹</button>
+        <button class="btn ghost" id="btn-bk-now">立即备份</button>
+        <button class="btn ghost" id="btn-bk-import">导入备份…</button>
+        <button class="btn ghost" id="btn-bk-off" hidden>清除备份文件夹</button>
+      </div>
+      <div class="bk-status" id="bk-state"></div>
+      <input type="file" id="bk-file" accept=".json,application/json" hidden>
     </div>
   </section>
 
@@ -1096,9 +1113,9 @@ progress{width:100%;height:14px}
 
 ## 一、功能概述
 
-TS翻译专家是一个**离线翻译工作台**：所有数据都存在你自己的浏览器里，不用注册、不上传，双击 HTML 文件或运行桌面版即可使用。它解决五件事：
+TS翻译专家是一个**离线翻译工作台**：所有数据都存在你自己的浏览器里，不用注册、不上传，双击 HTML 文件或运行桌面版即可使用。它解决六件事：
 
-> ⚠️ **重要提示：你的数据只存在本机浏览器里。清空浏览器缓存 / 清除站点数据会把配置、术语库、规则库、导入与生成记录、片段译文缓存一并删除，且无法恢复。** 清理缓存或重装浏览器前，请先到「术语库」「规则库」页用「导出 XLSX」做好备份（详见第九章常见问题与第十章注意事项）。
+> ⚠️ **重要提示：你的数据只存在本机浏览器里。清空浏览器缓存 / 清除站点数据会把配置、术语库、规则库、导入与生成记录、片段译文缓存一并删除，且无法恢复。** 清理缓存或重装浏览器前，请先在「配置」页的「备份与恢复」选定备份文件夹并点「立即备份」（见 3.5），或用「导出 XLSX」把术语库与规则库备份出来（详见第九章常见问题与第十章注意事项）。
 
 | 能力 | 用在哪 |
 | --- | --- |
@@ -1107,6 +1124,7 @@ TS翻译专家是一个**离线翻译工作台**：所有数据都存在你自�
 | **规则库** | 规定哪些内容**不翻译**（标签、占位符、数字、网址…）、哪些内容**照指定翻**（如字体名统一成 Arial） |
 | **TS 翻译** | 批量翻译 Qt 语言文件（`.ts`），产出 Excel 供人工校对，再把校好的 Excel 回填成翻译后的 `.ts` |
 | **Excel 导入导出** | 术语库与规则库都用 Excel 维护，可多人协作、可归档 |
+| **备份与恢复** | 把配置页 / 术语库 / 规则库 / TS 翻译页的数据一键备份到你指定的文件夹，换机器时「导入备份」复原 |
 
 页签从左到右就是推荐的使用顺序：**配置 → 翻译 / 术语库 / 规则库 → TS 翻译 → 使用说明**。
 
@@ -1127,9 +1145,11 @@ TS翻译专家是一个**离线翻译工作台**：所有数据都存在你自�
 
 > **建议顺序：先把术语库和规则库配好，再做 TS 翻译。** 这两份数据直接决定 `.ts` 的翻译质量，事后补配会需要重翻。
 
+> **顺手做一件事**：到「配置」页最下方点「选择备份文件夹」并把文件夹定下来（见 3.5）——以后想留档时点一下「立即备份」就行，换电脑、清缓存都不怕。
+
 TS 翻译有**两条可选的路线**——**机器翻译（机翻）**与**人工翻译**，前者由翻译服务自动出初稿，后者由翻译人员逐条填写；**两条路线的完整步骤、适用场景与区别见 7.7**。不论走哪条路线，**机翻结果都只是初稿，回填前必须人工复核**（见 7.8）。
 
-## 三、翻译服务配置
+## 三、翻译服务配置与备份
 
 ### 3.1 选一个翻译服务
 
@@ -1172,6 +1192,19 @@ TS 翻译有**两条可选的路线**——**机器翻译（机翻）**与**人�
   - **网络不通**：检查网络、防火墙，并核对「服务地址」是否与官方一致。
 
 > 阿里云、腾讯云的服务地址已内置，无需填写；只有百度、有道、AI 需要时可自定义。
+
+### 3.5 备份与恢复
+
+「配置」页最下方的「**备份与恢复**」把**配置页、术语库、规则库、TS 翻译页**的本机数据打包成一个 JSON 文件，写进你指定的文件夹——不必再逐个页面手动导出。
+
+- **先选文件夹**：点「**选择备份文件夹**」授权一个目录（需用 Edge / Chrome 等支持「选择文件夹」的浏览器）。这一步只登记目录、**不会生成备份**；浏览器出于安全限制只提供文件夹名、拿不到完整路径，这是正常的。
+- **只在点「立即备份」时才生成**：**不做自动备份**——只是选择文件夹、或在页面上改数据，都不会自动写出备份文件；想留档就点一下「立即备份」。浏览器重开后写入授权通常失效，点它可重新授权（失败时页面会提示）。
+- **每次写一个新文件**：文件名形如 `ts-translate-backup_20261013153045.json`，后缀是 14 位「年月日时分秒」；写完会删掉上一次那份，**文件夹里只留最新一份**。
+- **备份内容**：配置页的配置信息与额度用量；术语库的词条、语种与导入记录；规则库的特殊词条 / 正则规则 / 大小写规则；TS 翻译页的生成结果记录、翻译范围与下载路径名；以及界面偏好。
+- **导入备份**：选一份备份 JSON，确认后**先完全清空本机现有数据、再用备份逐键覆盖**，完成后页面自动刷新。**此操作不可撤销**——想保留现状，请先点「立即备份」或导出 XLSX。
+- **说明**：备份文件是纯文本 JSON，**内含密钥等明文信息**，请妥善保管；翻译缓存（`ztw_mt_cache`）属可重建的派生数据，**不进备份**，导入时一并清空。
+
+> 换电脑、重装浏览器时把备份文件夹一起带走，到新机器打开本页 →「导入备份」，配置与数据即可整体复原（已授权的目录句柄与设备绑定，需重新授权一次）。
 
 ## 四、翻译文本
 
@@ -1597,7 +1630,7 @@ A：工作表名必须与步骤一导入的 `.ts` 文件名一致。回到步骤
 A：可以。在「翻译范围」里勾选「已有译文」，它们会被重新翻译并覆盖。⚠️ 请先确认这些译文确实需要重翻。
 
 **Q：换电脑 / 换浏览器后数据没了。**
-A：所有数据只存在本机浏览器里。请定期用「导出 XLSX」备份术语库与规则库；换环境后重新导入即可。
+A：所有数据只存在本机浏览器里。平时用「配置」页的「备份与恢复」定期点「立即备份」留一份（见 3.5），并定期用「导出 XLSX」备份术语库与规则库；换环境后在新机器打开本页，点「导入备份」即可整体复原（或重新导入两份 XLSX）。
 
 **Q：想让某一行不被覆盖，但又想保留在表格里对照。**
 A：把它的 `NeedTranslate` 改成 `0`，它就不会被写回。
@@ -1613,20 +1646,21 @@ A：生成 Excel 必须先配置翻译服务（未配置时步骤一整体拦截
 
 **Q：清空浏览器缓存后，数据还在吗？**
 A：**不在了，而且无法恢复。** 配置（含密钥）、术语库、规则库、导入 / 生成记录、片段译文缓存全部保存在你本机浏览器里，与任何服务器无关；浏览器「清除浏览数据 / 清空缓存 / 清理站点数据」会把它们一次性删除。请在清理前先备份：
-- 到「术语库」「规则库」页点「导出 XLSX」，把两份表格存到本机或网盘；
+- **最省事：用「配置」页的「备份与恢复」** —— 选定一个备份文件夹后，点「立即备份」就能把配置页 / 术语库 / 规则库 / TS 翻译页的数据存成该文件夹里的一个 JSON 文件（见 3.5）；恢复时点「导入备份」即可（导入会完全清空并覆盖）；
+- 也可以到「术语库」「规则库」页点「导出 XLSX」，把两份表格存到本机或网盘；
 - 恢复时用同一份 Excel 重新导入即可（导入为全量覆盖）；
-- **配置页没有导出功能**，密钥与额度设置需要在清理后重新填一次；
+- **配置页没有导出功能**（密钥与额度设置不随术语库 / 规则库的 XLSX 走，请靠上面的「备份与恢复」留存）；
 - 换浏览器 / 换电脑 / 换访问地址（不同 origin）同样视为「新环境」，数据不会跟过去。
 
 > 建议把「导出 XLSX 备份」作为固定习惯：术语库与规则库改完就导一份，清理缓存、重装浏览器、换机器时都不会丢。
 
 ## 十、注意事项
 
-- ⚠️ **清空浏览器缓存会清除全部数据（且无法恢复）**：浏览器「清除浏览数据 / 清空缓存 / 清理站点数据」会连同本工具的数据一起删除——配置与密钥、术语库、规则库、导入记录、生成结果记录、片段译文缓存、字符用量统计全部会消失，本工具没有任何云端副本可供找回。**清理前请务必先备份**：到「术语库」「规则库」页点「导出 XLSX」，把两份表格存到本机或网盘；恢复时重新导入即可（配置页没有导出功能，密钥需重填）。
+- ⚠️ **清空浏览器缓存会清除全部数据（且无法恢复）**：浏览器「清除浏览数据 / 清空缓存 / 清理站点数据」会连同本工具的数据一起删除——配置与密钥、术语库、规则库、导入记录、生成结果记录、片段译文缓存、字符用量统计全部会消失，本工具没有任何云端副本可供找回。**清理前请务必先备份**：到「配置」页的「备份与恢复」选定一个备份文件夹、点「立即备份」，把配置页 / 术语库 / 规则库 / TS 翻译页的数据存成一份 JSON（见 3.5）；也可以到「术语库」「规则库」页点「导出 XLSX」，把两份表格存到本机或网盘。恢复时用「导入备份」或重新导入 XLSX 即可（配置页**没有**导出功能，密钥与额度设置只能靠「备份与恢复」留存）。
 - ⚠️ **机翻结果必须人工复核后再交付**：机器翻译产出的是**初稿**，可能出现错译 / 漏译、术语不统一、占位符或标签被破坏等问题。机翻只负责铺量，**译文的正确性由复核这一环决定**；复核要点与建议做法见 7.8。
 - **数据只在本机**：配置、术语库、规则库、导入 / 生成记录、语种类别、界面状态、字符用量统计，全部保存在**你自己的浏览器**里，本工具不向任何服务器上传数据；只有翻译请求会发给你配置的翻译服务。**这个 `.html` 文件本身不含你的任何数据**——把它发给别人，对方打开是全新出厂状态。
 - **片段译文缓存也在本机**：为保证「相同内容的片段得到一致译文」，TS 步骤一机翻过的片段会连同译文缓存到本机浏览器（与术语库等一样属于本机数据，清站点数据会一并清除）；它只在同一浏览器里生效，换浏览器 / 换电脑不会带过去。
-- **建议定期备份**：把「导出 XLSX」当成固定习惯——术语库与规则库改完就导一份备着；清除缓存、重装浏览器、换机器、换访问地址（不同 origin）都不会再造成数据丢失。
+- **建议定期备份**：最省事的做法是在「配置」页的「备份与恢复」里选定一个备份文件夹，**定期点「立即备份」**留一份（见 3.5）；同时把「导出 XLSX」当成固定习惯——术语库与规则库改完就导一份备着。清除缓存、重装浏览器、换机器、换访问地址（不同 origin）都不会再造成数据丢失。
 - **凭据为明文保存**，请勿在公用电脑上保存账号密钥。
 - **同一次 TS 转换请在同一浏览器会话里完成**：文件结构保存在页面内存中，关掉页面需要重新导入。
 - **翻译额度**由你所选的翻译服务提供，实际计费以服务商账单为准；本机显示的剩余额度仅供参考。
@@ -1701,8 +1735,8 @@ t.sheetStubs=true}if(t.type=="array"){t.type="binary";var a=xk(e,t);t.type="arra
 var ZTW = {};
 /* 版本号单一来源：界面顶部 #ver、<title>、使用说明页首行都从这里取，
    避免「界面一个号 / 文档另一个号」这种对不上的情况 */
-ZTW.VER = "1.1.0";
-ZTW.VER_DATE = "2026-10-12";
+ZTW.VER = "1.2.0";
+ZTW.VER_DATE = "2026-10-13";
 
 /* ---------------- util ---------------- */
 ZTW.util = (function(){
@@ -2167,12 +2201,12 @@ ZTW.util = (function(){
    下次打开仍在。生成文件时若该页签已设目录，就把文件直接写进目录、不再触发浏览器下载。
    浏览器不支持 / 未授权 / 写入失败时一律回落到原来的下载行为，绝不静默丢文件。 */
 ZTW.dlpath = (function(){
-  var DB="ztw_fs", STORE="dirs", STEPS=["step1","step2"];
+  var DB="ztw_fs", STORE="dirs", STEPS=["step1","step2","backup"];
   /* 目录**名**另外存一份到 localStorage：句柄（FileSystemDirectoryHandle）无法序列化进 localStorage，
      但名字可以 —— 于是「重开页面 / 存储被浏览器清理」时界面仍能显示上次选的文件夹名，
      而不是退回到「未设置」。这只是显示用，真正写入仍以句柄为准（没有句柄就必须重新授权）。 */
   var NAMES_KEY="ztw_dlpath_names";
-  var cache={ step1:null, step2:null };     /* step → { handle, name } */
+  var cache={ step1:null, step2:null, backup:null };     /* step → { handle, name } */
   function readNames(){
     try{ var v=JSON.parse(window.localStorage.getItem(NAMES_KEY)||"{}"); return (v && typeof v==="object") ? v : {}; }
     catch(e){ return {}; }
@@ -2316,8 +2350,147 @@ ZTW.dlpath = (function(){
       return chain.then(function(){ return { ok:saved>0 && fail===0, saved:saved, fail:fail, name:c.name }; });
     }).catch(function(){ return { ok:false, name:c.name, saved:0, fail:list.length }; });
   }
+  /* 写单个文件（备份等非「生成结果」用途）：需目录句柄 + readwrite 授权
+     返回 Promise<{ ok, denied?, unsupported?, msg? }> */
+  function saveOne(step, name, blob){
+    var c=cache[step];
+    if(!c || !c.handle) return Promise.resolve({ ok:false, unsupported:true, msg:"未设置文件夹" });
+    var h=c.handle;
+    return permOf(h).then(function(st){
+      return st==="granted" ? true : askPerm(h);
+    }).then(function(ok){
+      if(!ok) return { ok:false, denied:true, msg:"浏览器未授予该文件夹的写入权限" };
+      return writeOne(h, name, blob).then(function(){ return { ok:true, name:name }; },
+        function(e){ return { ok:false, msg:(e && e.message) || String(e) }; });
+    }).catch(function(e){ return { ok:false, msg:(e && e.message) || String(e) }; });
+  }
+  /* 删除目录里指定的文件（更新备份时先删旧文件）；文件不存在视为成功 */
+  function remove(step, name){
+    var c=cache[step];
+    if(!c || !c.handle || !name || typeof c.handle.removeEntry!=="function") return Promise.resolve(false);
+    try{ return Promise.resolve(c.handle.removeEntry(name)).then(function(){ return true; }, function(){ return false; }); }
+    catch(e){ return Promise.resolve(false); }
+  }
+  /* 当前授权状态：Promise<"granted"|"prompt"|"denied"|"none">（自动写入前先问一句，不主动弹授权） */
+  function permState(step){
+    var c=cache[step];
+    if(!c || !c.handle) return Promise.resolve("none");
+    return permOf(c.handle);
+  }
+  /* 主动申请授权（必须在用户手势里调用，如按钮点击） */
+  function requestPerm(step){
+    var c=cache[step];
+    if(!c || !c.handle) return Promise.resolve(false);
+    return permOf(c.handle).then(function(st){ return st==="granted" ? true : askPerm(c.handle); });
+  }
   return { supported:supported, init:init, info:info, pick:pick, clear:clear, saveAll:saveAll, reveal:reveal,
+    saveOne:saveOne, remove:remove, permState:permState, requestPerm:requestPerm,
     STEPS:STEPS, DB_NAME:DB, STORE_NAME:STORE, NAMES_KEY:NAMES_KEY };
+})();
+
+/* ---------------- 备份 / 恢复（配置页） ----------------
+   把「配置页 + 术语库 + 规则库 + TS 翻译页」的本机数据打包成一个 JSON 备份文件，写进用户
+   选定的备份文件夹（复用 dlpath 的目录授权能力，槽位 "backup"）。三条口径：
+   ① 覆盖范围＝这四个页面的全部本机数据键（列表见 KEYS）。页面上任何**会改变数据的操作**
+      （保存配置 / 额度、增删改词条、导入导出术语库、导入记录、特殊词条与正则与大小写规则、
+      翻译范围、生成结果记录、语种增删）最终都写到这些键上，逐键**原样**留存（不做再序列化）；
+   ② **只手动、不自动**：仅当用户点「立即备份」时才写盘——选择文件夹、改动数据都不会自动
+      生成备份。每次写入一个新文件名（14 位「年月日时分秒」后缀），写完删掉上一次那份，
+      备份文件夹里只留最新一份；
+   ③ 导入备份＝**先清空本机现有数据、再用备份逐键覆盖**（撤销不了），随后自动刷新页面。
+   不属于这四个页面用户数据、因此不进备份的本机数据：
+     · ztw_mt_cache —— 可重建的片段译文缓存（导入时一并清空，避免与备份数据不一致）；
+     · ztw_backup_last —— 备份自身的「最近一次」记账；
+     · <键名>_backup —— 主键解析失败时留下的旧副本，是主键的陈旧快照；
+     · IndexedDB 里的目录授权句柄（ztw_fs）—— 与设备绑定，也不参与还原。 */
+ZTW.backup = (function(){
+  var STEP="backup", KEY_LAST="ztw_backup_last", PREFIX="ts-translate-backup_";
+  /* 备份范围：四个页面的本机数据键 */
+  var GROUPS=[
+    { page:"配置页", keys:["ztw_config","ztw_quota","ztw_usage"] },
+    { page:"术语库", keys:["ztw_glossary","ztw_langs","ztw_import_log"] },
+    { page:"规则库", keys:["ztw_rules","ztw_rules_backup"] },
+    { page:"TS 翻译页", keys:["ztw_ts_gen_log","ztw_ts_scope","ztw_dlpath_names"] },
+    { page:"界面偏好", keys:["ztw_ui"] }
+  ];
+  var KEYS=[];
+  GROUPS.forEach(function(g){ g.keys.forEach(function(k){ KEYS.push(k); }); });
+  var CACHE_KEY="ztw_mt_cache";        /* 导入时一并清空（可重建，不入备份） */
+  var writing=false, lastResult=null;
+
+  function lsGet(k){ try{ return localStorage.getItem(k); }catch(e){ return null; } }
+  function lsSet(k,v){ try{ localStorage.setItem(k,v); return true; }catch(e){ return false; } }
+  function lsDel(k){ try{ localStorage.removeItem(k); }catch(e){} }
+  function readLast(){
+    try{ var v=JSON.parse(lsGet(KEY_LAST)||"null"); return (v && typeof v==="object") ? v : null; }
+    catch(e){ return null; }
+  }
+  function writeLast(v){ lsSet(KEY_LAST, JSON.stringify(v)); }
+  /* 备份文件名：标识 + 14 位「年月日时分秒」时间戳后缀 */
+  function fileName(stamp){ return PREFIX+String(stamp||ZTW.util.tsStamp())+".json"; }
+  /* 快照：逐键原样留存（读不到该键时记为缺省，导入时对应清空） */
+  function snapshot(){
+    var keys={}, missing=[];
+    KEYS.forEach(function(k){ var v=lsGet(k); if(v==null) missing.push(k); else keys[k]=v; });
+    return { app:"ts-translate", kind:"backup", ver:ZTW.VER, time:Date.now(),
+      stamp:ZTW.util.tsStamp(), keys:keys, missing:missing };
+  }
+  /* 当前状态（供界面显示）：文件夹信息 + 最近一次备份记录 */
+  function state(){
+    return { keys:KEYS.slice(), groups:GROUPS.map(function(g){ return { page:g.page, keys:g.keys.slice() }; }),
+      step:STEP, last:readLast(), result:lastResult,
+      folder:(ZTW.dlpath ? ZTW.dlpath.info(STEP) : { supported:false, on:false, name:"", saved:false }) };
+  }
+  /* 写盘（唯一入口）：授权校验 → 写新备份 → 删旧备份 → 记账。
+     只在用户手势里调用（「立即备份」按钮）——需要写入授权时可直接当场申请，不靠后台自动跑。 */
+  function writeNow(reason){
+    if(writing) return Promise.resolve({ ok:false, busy:true });
+    if(!ZTW.dlpath) return Promise.resolve({ ok:false, unsupported:true });
+    var info=ZTW.dlpath.info(STEP);
+    if(!info.supported) return Promise.resolve({ ok:false, unsupported:true });
+    if(!info.on) return Promise.resolve({ ok:false, off:true, msg:"尚未选择备份文件夹" });
+    var snap=snapshot(), text=JSON.stringify(snap);
+    writing=true;
+    return ZTW.dlpath.requestPerm(STEP).then(function(ok){
+      if(!ok) return { ok:false, needPerm:true };
+      var name=fileName(snap.stamp), prev=readLast();
+      var blob=new Blob([text], { type:"application/json" });
+      return ZTW.dlpath.saveOne(STEP, name, blob).then(function(r){
+        if(!r || !r.ok) return { ok:false, msg:(r && r.msg) || "写入失败", denied:!!(r && r.denied) };
+        var drop=(prev && prev.name && prev.name!==name) ? ZTW.dlpath.remove(STEP, prev.name) : Promise.resolve(true);
+        return Promise.resolve(drop).then(function(){
+          var rec={ name:name, time:snap.time, size:text.length, why:reason||"manual",
+            folder:info.name || "" };
+          writeLast(rec);
+          return { ok:true, name:name, size:text.length, time:rec.time };
+        });
+      });
+    }).then(function(r){ writing=false; lastResult=r; return r; },
+      function(e){ writing=false; return { ok:false, msg:(e && e.message) || String(e) }; });
+  }
+  /* 立即备份：唯一会生成备份的入口（用户手势里，可在此重新申请写入授权） */
+  function now(){ return writeNow("manual"); }
+  /* 选择备份文件夹：只登记目录，**不**生成备份（生成要等用户点「立即备份」） */
+  function pick(){ return ZTW.dlpath.pick(STEP); }
+  /* 清空备份文件夹设置 */
+  function off(){ return ZTW.dlpath.clear(STEP).then(function(){ return true; }); }
+  /* 应用一份备份对象：先完全清空备份范围内的键，再逐键覆盖（范围外的键一律忽略） */
+  function apply(obj){
+    if(!obj || obj.kind!=="backup" || !obj.keys || typeof obj.keys!=="object") return { ok:false, msg:"这不是本工具导出的备份文件" };
+    var n=0;
+    KEYS.forEach(function(k){ lsDel(k); });
+    Object.keys(obj.keys).forEach(function(k){ if(KEYS.indexOf(k)>=0){ lsSet(k, obj.keys[k]); n++; } });
+    lsDel(CACHE_KEY);
+    return { ok:true, n:n, time:obj.time||0, ver:obj.ver||"" };
+  }
+  function importText(text){
+    var obj; try{ obj=JSON.parse(String(text||"")); }catch(e){ return { ok:false, msg:"文件内容不是合法 JSON" }; }
+    return apply(obj);
+  }
+  return { STEP:STEP, KEY_LAST:KEY_LAST, KEY_PREFIX:PREFIX,
+    KEYS:KEYS, GROUPS:GROUPS, CACHE_KEY:CACHE_KEY,
+    fileName:fileName, snapshot:snapshot, state:state, now:now, pick:pick, off:off,
+    apply:apply, importText:importText };
 })();
 
 /* ---------------- store ---------------- */
@@ -5045,6 +5218,7 @@ ZTW.ui = (function(){
     ZTW.store.saveUI(uiState);
     /* 切回配置页时刷新额度显示（翻译过程中用量会变化） */
     if(name==="config" && ZTW.configTab && ZTW.configTab.renderQuota) ZTW.configTab.renderQuota();
+    if(name==="config" && ZTW.configTab && ZTW.configTab.renderBackup) ZTW.configTab.renderBackup();
     /* 切回翻译页时刷新图例与统计（大小写规则可能刚在规则库改过） */
     if(name==="translate" && ZTW.translateTab && ZTW.translateTab.refresh) ZTW.translateTab.refresh();
   }
@@ -5289,6 +5463,83 @@ ZTW.configTab = (function(){
     U.$("btn-cfg-eye-aliyun").addEventListener("click", function(){ toggleEye(this); });
     U.$("btn-cfg-eye-tencent").addEventListener("click", function(){ toggleEye(this); });
     U.$("btn-cfg-eye-ai").addEventListener("click", function(){ toggleEye(this); });
+    bindBackup();
+    renderBackup();
+  }
+  /* ============ 备份与恢复（四页本机数据打包 / 覆盖式导入） ============ */
+  function bindBackup(){
+    var B=ZTW.backup;
+    var pick=U.$("btn-bk-pick"), nowBtn=U.$("btn-bk-now"), imp=U.$("btn-bk-import"), off=U.$("btn-bk-off"), file=U.$("bk-file");
+    if(!B || !pick) return;
+    pick.addEventListener("click", function(){
+      B.pick().then(function(r){
+        if(r && r.ok) ZTW.ui.toast("已把「"+r.name+"」设为备份文件夹，点「立即备份」生成备份");
+        else if(!r || !r.aborted) ZTW.ui.toast((r && r.msg) || "选择文件夹失败", true);
+        renderBackup();
+      });
+    });
+    nowBtn.addEventListener("click", function(){
+      B.now().then(function(r){
+        if(r && r.ok) ZTW.ui.toast("备份已生成："+r.name);
+        else if(r && r.unsupported) ZTW.ui.toast("当前浏览器不支持选择文件夹，备份不可用", true);
+        else if(r && r.off) ZTW.ui.toast("请先选择备份文件夹", true);
+        else if(r && r.needPerm) ZTW.ui.toast("浏览器未授予文件夹写入权限，请再点一次「立即备份」重新授权", true);
+        else ZTW.ui.toast((r && r.msg) || "备份失败", true);
+        renderBackup();
+      });
+    });
+    off.addEventListener("click", function(){
+      B.off().then(function(){ renderBackup(); ZTW.ui.toast("已清除备份文件夹设置"); });
+    });
+    imp.addEventListener("click", function(){ try{ file.value=""; }catch(e){} file.click(); });
+    file.addEventListener("change", function(){
+      var f=file.files && file.files[0]; if(!f) return;
+      var rd=new FileReader();
+      rd.onload=function(){ confirmImport(String(rd.result||""), f.name); };
+      rd.onerror=function(){ ZTW.ui.toast("读取备份文件失败", true); };
+      rd.readAsText(f);
+    });
+  }
+  /* 导入前必须确认「完全清空并覆盖」；备份里的键先校验，再落盘 */
+  function bkStampText(s){
+    return String(s||"").replace(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/, "$1-$2-$3 $4:$5:$6");
+  }
+  function confirmImport(text, fname){
+    var obj=null;
+    try{ obj=JSON.parse(text); }catch(e){ ZTW.ui.toast("备份文件不是合法 JSON，已取消导入", true); return; }
+    if(!obj || obj.kind!=="backup" || !obj.keys || typeof obj.keys!=="object"){ ZTW.ui.toast("这不是本工具导出的备份文件，已取消导入", true); return; }
+    var n=Object.keys(obj.keys).filter(function(k){ return ZTW.backup.KEYS.indexOf(k)>=0; }).length;
+    ZTW.ui.openModal("<h3>导入备份</h3>"
+      +"<p>备份文件：<code>"+U.esc(fname||"")+"</code>"
+      +(obj.stamp ? "　导出时间："+U.esc(bkStampText(obj.stamp)) : "")+"</p>"
+      +"<p>将<b>完全清空</b>本机现有的备份范围内数据（配置 / 术语库 / 规则库 / TS 翻译页，共 "+ZTW.backup.KEYS.length+" 个数据项），再用备份里的 <b>"+n+"</b> 项逐键覆盖。</p>"
+      +"<p class='hint' style='color:var(--danger)'>此操作不可撤销；导入完成后页面会自动刷新。如需保留现有数据，请先点「取消」并做一次「立即备份」。</p>"
+      +'<div class="foot"><button class="btn danger" id="bk-imp-ok">清空并导入</button>'
+      +'<button class="btn ghost" id="bk-imp-cancel">取消</button></div>');
+    U.$("bk-imp-cancel").addEventListener("click", ZTW.ui.closeModal);
+    U.$("bk-imp-ok").addEventListener("click", function(){
+      ZTW.ui.closeModal();
+      var r=ZTW.backup.importText(text);
+      if(!r.ok){ ZTW.ui.toast(r.msg || "导入失败", true); return; }
+      ZTW.ui.toast("备份已导入（"+r.n+" 项），正在刷新页面…");
+      setTimeout(function(){ try{ location.reload(); }catch(e){} }, 700);
+    });
+  }
+  function renderBackup(){
+    var B=ZTW.backup, box=U.$("bk-state");
+    if(!B || !box) return;
+    var st=B.state(), f=st.folder||{}, last=st.last, lines=[];
+    if(!f.supported) lines.push("当前浏览器不支持「选择文件夹」（建议用 Edge / Chrome 打开本页），备份功能不可用。");
+    else if(f.on) lines.push("备份文件夹："+f.name+"（浏览器出于安全限制只提供文件夹名，不含完整路径）");
+    else if(f.saved) lines.push("上次备份文件夹："+f.name+" · 本机已无可用授权，点「选择备份文件夹」重新指定");
+    else lines.push("尚未选择备份文件夹 —— 选定后点「立即备份」生成备份（共 "+st.keys.length+" 个数据项）。");
+    if(last && last.name) lines.push("最近一次备份："+(last.time ? ZTW.util.fmtTime(last.time)+" · " : "")+last.name+(last.size ? "（"+ZTW.util.fmtBytes(last.size)+"）" : ""));
+    if(f.on) lines.push("备份只在点「立即备份」时生成（不做自动备份）；每次写入新文件并删除上一份，文件夹里只留最新一份。");
+    box.innerHTML=lines.map(function(s){ return "<div>"+U.esc(s)+"</div>"; }).join("");
+    var pk=U.$("btn-bk-pick"), nw=U.$("btn-bk-now"), of=U.$("btn-bk-off");
+    if(pk) pk.disabled=!f.supported;
+    if(nw) nw.disabled=!f.supported;
+    if(of) of.hidden=!f.on;
   }
   function toggleEye(btn){
     var inp=U.$(btn.getAttribute("data-eye"));
@@ -5296,7 +5547,7 @@ ZTW.configTab = (function(){
     inp.type=inp.type==="password"?"text":"password";
     btn.textContent=inp.type==="password"?"显示":"隐藏";
   }
-  return { init:init, load:load, renderQuota:renderQuota };
+  return { init:init, load:load, renderQuota:renderQuota, renderBackup:renderBackup };
 })();
 
 /* ---------------- 翻译页 ---------------- */
@@ -8703,7 +8954,11 @@ ZTW.tsTab = (function(){
     bindScope(); renderScope();
     renderDlPath();
     /* 目录句柄存在 IndexedDB 里，读回来是异步的：读完后重绘一次标签 */
-    ZTW.dlpath.init().then(renderDlPath);
+    ZTW.dlpath.init().then(function(){
+      renderDlPath();
+      /* 目录句柄是异步读回的：读完再刷新备份卡片状态（否则会先显示「未设置」） */
+      if(ZTW.configTab && ZTW.configTab.renderBackup) ZTW.configTab.renderBackup();
+    });
     renderSummary();
   }
   return { init:init,
