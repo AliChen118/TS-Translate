@@ -557,7 +557,7 @@ progress{width:100%;height:14px}
     </div>
     <div class="titles">
       <h1>TS翻译专家</h1>
-      <div class="sub">TS Translation Expert <code id="ver">1.2.0</code></div>
+      <div class="sub">TS Translation Expert <code id="ver">1.3.0</code></div>
     </div>
     <div class="stats">
       <div class="stat" title="累计成功完成的翻译次数（本机统计）"><b id="stat-translate">0</b><span>翻译次数</span></div>
@@ -719,6 +719,10 @@ progress{width:100%;height:14px}
       <label class="fld">请求间隔（毫秒，批量翻译时每条之间的等待）</label>
       <input type="number" id="cfg-req-interval" min="0" max="20000" step="100" style="max-width:200px" value="1000">
       <div class="hint">百度标准版填 1000；阿里云 100～200；0＝不等待。</div>
+
+      <label class="fld">翻译线程数（多线程并发，1～8）</label>
+      <input type="number" id="cfg-threads" min="1" max="8" step="1" style="max-width:200px" value="1">
+      <div class="hint">越大越快，但可能触发接口频率限制；百度标准版建议 1。</div>
 
       <div class="row" style="margin-top:18px">
         <button class="btn" id="btn-save-config">保存配置</button>
@@ -1176,9 +1180,10 @@ TS 翻译有**两条可选的路线**——**机器翻译（机翻）**与**人�
 - **为什么不是平台实时数据**：这些平台大多不提供额度查询，浏览器拿不到真实剩余量；AI 大模型按用量计费、也没有统一免费额度，因此这里只统计本机已送出的字符数。
 - 进度条 ≥80% 变橙、用尽变红，可作提前提醒；**实际扣费以平台账单为准**。
 
-### 3.3 请求间隔
+### 3.3 请求间隔与线程数
 
 - **请求间隔**：批量翻译时每两条之间的等待时间（毫秒）。百度标准版填 `1000`，阿里云 / 百度高级版可填 `100～200`，填 `0` 表示不等待。
+- **翻译线程数**：批量翻译时同时进行几条请求（`1～8`，默认 `1`＝逐条串行）。调到 `2` 以上会并行发送，速度约成倍提升；但调太高可能触发翻译服务的频率限制（出现「请求频率超限」时把线程数调小、或把间隔调大），百度标准版建议保持 `1`。请求间隔按**每条线程各自**计算。
 
 ### 3.4 测试连接
 
@@ -1735,7 +1740,7 @@ t.sheetStubs=true}if(t.type=="array"){t.type="binary";var a=xk(e,t);t.type="arra
 var ZTW = {};
 /* 版本号单一来源：界面顶部 #ver、<title>、使用说明页首行都从这里取，
    避免「界面一个号 / 文档另一个号」这种对不上的情况 */
-ZTW.VER = "1.2.0";
+ZTW.VER = "1.3.0";
 ZTW.VER_DATE = "2026-10-13";
 
 /* ---------------- util ---------------- */
@@ -1744,6 +1749,54 @@ ZTW.util = (function(){
   function esc(s){ return String(s==null?"":s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;"); }
   function escRe(s){ return s.replace(/[.*+?^${}()|[\]\\]/g,"\\$&"); }
   function debounce(fn, ms){ var t=null; return function(){ var a=arguments,self=this; clearTimeout(t); t=setTimeout(function(){ fn.apply(self,a); }, ms); }; }
+  /* 翻译线程数（并发上限）：把配置里的值收敛到 [1, THREADS_MAX]，非法 / 缺省一律按 1 处理。
+     单点收敛保证界面、TS 机翻、术语库一键翻译读到的是同一份口径。 */
+  var THREADS_MIN=1, THREADS_MAX=8;
+  function threadsOf(cfg){
+    var v=parseInt(cfg && cfg.threads, 10);
+    if(isNaN(v)) return 1;
+    return Math.max(THREADS_MIN, Math.min(THREADS_MAX, v));
+  }
+  /* 并发工作池（多线程批量翻译单点）：把一串任务分给至多 limit 条「泳道」并行执行。
+       —— items：任务数组（元素原样传给 worker）
+       —— spec.limit：并发上限（≥1；非法值按 1）
+       —— spec.worker(item)：执行单条，返回 Promise（不返回＝瞬时完成，如规则命中的 verbatim）
+       —— spec.onEach(item, { done, total })：每条完成后回调（进度 / 落盘；单线程事件循环里串行触发）
+       —— spec.gap：同一泳道两次任务之间的等待毫秒（0＝不等待；跨泳道互不影响）
+       —— spec.gapFor(item)：本条**取用前**判定是否要在它之后等 gap（默认 true；不送接口的瞬时条目可返回 false）。
+          注意在 worker 之前求值：worker 会把条目状态改写，跑完再问就永远拿不到「需要等」。
+       —— spec.shouldStop()：每次取任务前判断，为真则不再取新任务（已在飞的跑完）
+     返回 Promise<{ total, done, stopped }>。
+     要点：各任务之间互不依赖（译文写回各自条目对象），因此并行不改变结果；顺序只体现在 onEach 的调用时机。 */
+  function runPool(items, spec){
+    spec=spec||{};
+    var list=Array.isArray(items)?items:[];
+    var total=list.length;
+    if(!total) return Promise.resolve({ total:0, done:0, stopped:false });
+    var limit=Math.max(1, Math.floor(Number(spec.limit))||1);
+    var gap=Math.max(0, Number(spec.gap)||0);
+    var stop=(typeof spec.shouldStop==="function") ? spec.shouldStop : function(){ return false; };
+    var gapFor=(typeof spec.gapFor==="function") ? spec.gapFor : function(){ return true; };
+    var next=0, done=0, stopped=false;
+    function lane(){
+      if(stopped || next>=total) return Promise.resolve();
+      if(stop()){ stopped=true; return Promise.resolve(); }
+      var item=list[next++];
+      /* 是否在本条之后再等一个间隔：必须在跑 worker **之前**判定 ——
+         worker 会把条目状态从 pending/failed 改成 new，跑完再问 gapFor(item) 永远拿到「不需要等」，
+         节流与「停止」的窗口期都会消失（串行与并发都一样）。 */
+      var waitAfter=(gap>0) && gapFor(item);
+      return Promise.resolve().then(function(){ return spec.worker(item); }).then(function(){
+        done++;
+        if(spec.onEach) spec.onEach(item, { done:done, total:total });
+      }).then(function(){
+        if(waitAfter && !stopped && next<total) return new Promise(function(r){ setTimeout(r, gap); });
+      }).then(lane);
+    }
+    var lanes=[];
+    for(var k=0, n=Math.min(limit, total); k<n; k++) lanes.push(lane());
+    return Promise.all(lanes).then(function(){ return { total:total, done:done, stopped:stopped }; });
+  }
   function uuid(){ return "g_"+Date.now().toString(36)+"_"+Math.random().toString(36).slice(2,8); }
   function download(name, blob){
     var a=document.createElement("a"); a.href=URL.createObjectURL(blob); a.download=name;
@@ -2191,7 +2244,7 @@ ZTW.util = (function(){
     box.addEventListener("change", function(e){ if(isInput(e.target)) jump(); });
     return box;
   }
-  return {$:$, esc:esc, escRe:escRe, debounce:debounce, uuid:uuid, md5:md5, sha256:sha256, download:download, downloadText:downloadText, downloadSmart:downloadSmart, downloadMany:downloadMany, deliverFiles:deliverFiles, zipBytes:zipBytes, zipBlob:zipBlob, b64FromBytes:b64FromBytes, bytesFromB64:bytesFromB64, blobFromB64:blobFromB64, artOf:artOf, artSize:artSize, trimArt:trimArt, ART_ONE_MAX:ART_ONE_MAX, ART_BUDGET:ART_BUDGET, fmtBytes:fmtBytes, pascal:pascal, tsStamp:tsStamp, resultFileName:resultFileName, isEmbedded:isEmbedded, bindSearchTitles:bindSearchTitles, fitSearchWidths:fitSearchWidths, searchWidthOf:searchWidthOf, fmtTime:fmtTime, fmtNum:fmtNum, pagerHTML:pagerHTML, bindPager:bindPager};
+  return {$:$, esc:esc, escRe:escRe, debounce:debounce, runPool:runPool, threadsOf:threadsOf, THREADS_MAX:THREADS_MAX, uuid:uuid, md5:md5, sha256:sha256, download:download, downloadText:downloadText, downloadSmart:downloadSmart, downloadMany:downloadMany, deliverFiles:deliverFiles, zipBytes:zipBytes, zipBlob:zipBlob, b64FromBytes:b64FromBytes, bytesFromB64:bytesFromB64, blobFromB64:blobFromB64, artOf:artOf, artSize:artSize, trimArt:trimArt, ART_ONE_MAX:ART_ONE_MAX, ART_BUDGET:ART_BUDGET, fmtBytes:fmtBytes, pascal:pascal, tsStamp:tsStamp, resultFileName:resultFileName, isEmbedded:isEmbedded, bindSearchTitles:bindSearchTitles, fitSearchWidths:fitSearchWidths, searchWidthOf:searchWidthOf, fmtTime:fmtTime, fmtNum:fmtNum, pagerHTML:pagerHTML, bindPager:bindPager};
 })();
 
 /* ---------------- 默认下载路径（TS 步骤一 / 步骤二各自独立保存） ----------------
@@ -2503,6 +2556,7 @@ ZTW.store = (function(){
     aiUrl:"https://api.openai.com/v1/chat/completions", aiKey:"", aiModel:"gpt-4o-mini",
     aiPrompt:"你是一名专业翻译。请将用户发来的文本从{{from}}翻译成{{to}}，直接输出译文本身，不要输出任何解释、引号或额外内容。",
     reqInterval:1000,
+    threads:1,
     defaultFrom:"zh", defaultTo:"en" };
   var DEFAULT_UI={ activeTab:"translate", glossaryPage:1, lastFrom:"zh", lastTo:"en",
     glossaryShowLangs:null, glossaryColW:null, helpTocOpen:true,
@@ -3320,7 +3374,7 @@ ZTW.api = (function(){
     "FailedOperation.ServiceIsolate":"服务已停服（账号欠费），请充值后重试",
     "FailedOperation.UserNotRegistered":"服务未开通：请到腾讯云机器翻译控制台开通服务",
     "LimitExceeded.ErrTextTooLong":"文本过长（单次上限约 2000 字符）",
-    "RequestLimitExceeded":"请求频率超限，请调大「请求间隔」后重试",
+    "RequestLimitExceeded":"请求频率超限，请调大「请求间隔」或调小「翻译线程数」后重试",
     "MissingParameter.TokenError":"请求缺少必要参数",
     "InvalidParameter":"参数错误，请检查语言方向与文本内容"
   };
@@ -4788,39 +4842,49 @@ ZTW.tsproc = (function(){
     /* 大小写规则整份读一次，逐条传下去：原先在 runPipeline 内逐段读取，
        一个文档 2000 条就是 2000 次 JSON.parse（localStorage 是同步 API，直接阻塞主线程） */
     var caseRules=opts.caseRules||ZTW.store.getCaseRules();
-    var i=0, ok=0, fail=0, okChars=0, stopped=false, chain=Promise.resolve();
-    list.forEach(function(msg){
-      /* 该条是否真的要送接口：verbatim/empty 不送（也就不需要请求间隔） */
-      var needApi=(msg.status==="pending" || msg.status==="failed");
-      chain=chain.then(function(){
-        if(stopped) return;
-        /* 用户点了「停止」：剩余条目不再送接口，已完成的译文原样保留 */
-        if(opts.shouldStop && opts.shouldStop()){ stopped=true; return; }
+    var total=list.length, i=0, ok=0, fail=0, okChars=0;
+    /* 相同片段的在飞去重：多线程下两条泳道可能同时遇到同一片段，此时只发一次请求、
+       另一条复用同一个 Promise —— 既省一次接口调用与额度，又保证「相同内容一致译文」的既有契约 */
+    var inflight={};
+    function translateDedup(t){
+      var k=String(t);
+      if(inflight[k]) return inflight[k];
+      var p=ZTW.api.requestTranslate(opts.cfg, t, opts.fromLang, toLang);
+      inflight[k]=p;
+      var clear=function(){ if(inflight[k]===p) delete inflight[k]; };
+      p.then(clear, clear);
+      return p;
+    }
+    /* 并发上限＝配置页「翻译线程数」（1～8）；limit=1 时退化为原先的严格串行（含「接口条目之间才等 gap」） */
+    return U.runPool(list, {
+      limit:U.threadsOf(opts.cfg),
+      gap:opts.gap,
+      shouldStop:function(){ return !!(opts.shouldStop && opts.shouldStop()); },
+      gapFor:function(msg){ return msg.status==="pending" || msg.status==="failed"; },
+      worker:function(msg){
+        /* 该条是否真的要送接口：verbatim/empty 不送（离线即最终结果，计成功、不占节流） */
+        var needApi=(msg.status==="pending" || msg.status==="failed");
         if(!needApi){ ok++; return; }
         return ZTW.rules.runPipeline(msg.sourceText, {
           rules:opts.rules, glossary:opts.glossary, from:opts.fromLang, to:toLang,
           segs:msg.segs, cache:cache, mtCache:opts.mtCache, skipCheck:false,
-          caseRules:caseRules,
-          translateFn:function(t){ return ZTW.api.requestTranslate(opts.cfg, t, opts.fromLang, toLang); }
+          caseRules:caseRules, translateFn:translateDedup
         }).then(function(r){
           if(r.status==="failed"){ msg.status="failed"; msg.target=""; msg.error=r.error; fail++; }
           else{ msg.status="new"; msg.target=r.text; ok++; okChars+=(r.srcChars||0); }
         }).catch(function(e){
           msg.status="failed"; msg.target=""; msg.error=e; fail++;
         });
-      }).then(function(){
-        if(stopped) return;
+      },
+      onEach:function(msg){
         i++;
         /* onProgress 同时给出累计成功/失败数，便于进度条显示「成功 n · 失败 n」 */
-        if(opts.onProgress) opts.onProgress(i, list.length, msg, { ok:ok, fail:fail });
-        /* 请求间隔只在真正发过接口的条目之间生效（规则命中条目是瞬时完成，不该被节流拖慢） */
-        if(needApi && opts.gap>0 && i<list.length) return new Promise(function(res){ setTimeout(res, opts.gap); });
-      });
-    });
-    return chain.then(function(){
+        if(opts.onProgress) opts.onProgress(i, total, msg, { ok:ok, fail:fail });
+      }
+    }).then(function(res){
       /* TS 批量翻译同样计入「当天/当月已翻译字符数」 */
       if(okChars){ ZTW.usage.add(okChars); ZTW.ui.refreshStats(); }
-      return { ok:ok, fail:fail, total:list.length, chars:okChars, stopped:stopped };
+      return { ok:ok, fail:fail, total:total, chars:okChars, stopped:!!res.stopped };
     });
   }
   /* 把译文写入元素；含标签时按富文本片段解析，保证 <b> 等标签不被转义 */
@@ -5282,6 +5346,7 @@ ZTW.configTab = (function(){
     U.$("cfg-ai-model").value=cfg.aiModel||"gpt-4o-mini";
     U.$("cfg-ai-prompt").value=cfg.aiPrompt||"";
     U.$("cfg-req-interval").value=(cfg.reqInterval==null?1000:cfg.reqInterval);
+    U.$("cfg-threads").value=U.threadsOf(cfg);
     toggleProvider();
   }
   /* 接口网站入口：每家只保留两个链接 —— 官方网站 + 精选的配置教程。
@@ -5349,7 +5414,8 @@ ZTW.configTab = (function(){
       aiKey:U.$("cfg-ai-key").value.trim(),
       aiModel:U.$("cfg-ai-model").value.trim()||"gpt-4o-mini",
       aiPrompt:U.$("cfg-ai-prompt").value.trim()||"你是一名专业翻译。请将用户发来的文本从{{from}}翻译成{{to}}，直接输出译文本身，不要输出任何解释、引号或额外内容。",
-      reqInterval:(function(){ var v=parseInt(U.$("cfg-req-interval").value,10); return isNaN(v)||v<0?1000:v; })()
+      reqInterval:(function(){ var v=parseInt(U.$("cfg-req-interval").value,10); return isNaN(v)||v<0?1000:v; })(),
+      threads:(function(){ var v=parseInt(U.$("cfg-threads").value,10); return isNaN(v)?1:Math.max(1, Math.min(U.THREADS_MAX, v)); })()
     };
   }
   function save(){
@@ -6121,32 +6187,45 @@ ZTW.mtTask = (function(){
 
   function cfg(){ return ZTW.store.getConfig(); }
 
+  /* 任务体：把全部 jobs 交给并发池并行执行（并发上限＝任务启动时的「翻译线程数」）。
+     每条泳道在自己的两次请求之间等 T.gap（+1 条默认并发=1 时即原先的严格串行）。
+     停止 = 置 stopReason，池不再取新任务、已在飞的跑完，随后 finish() 统一收尾落盘。 */
   function step(){
     if(!T || T.state!=="running") return;
     if(T.stopReason || T.done>=T.total){ finish(); return; }
-    var job=T.jobs[T.done];
-    T.cur={ term:job.term, to:job.to };
-    emit();
-    var text=job.term;
-    ZTW.api.requestTranslate(cfg(), text, T.src, job.to).then(function(res){
-      var val=String(res==null?"":res).trim();
-      if(val){ T.pending.push({ id:job.id, to:job.to, val:val }); T.ok++; }
-      else T.empty++;
-      /* 只统计真正送进接口的原文长度，与翻译页 srcChars 口径一致 */
-      ZTW.usage.add(text.length);
-    }).catch(function(err){
-      T.fails.push({ to:job.to, term:text, msg:String((err&&err.message)||err) });
-      /* 前几条全失败通常是凭据 / 网络问题，直接停下避免白刷额度 */
-      if(!T.ok && T.fails.length>=3) T.stopReason="error";
+    var jobs=T.jobs;
+    ZTW.util.runPool(jobs, {
+      limit:T.limit||1, gap:T.gap,
+      shouldStop:function(){ return !T || T.state!=="running" || !!T.stopReason; },
+      worker:function(job){
+        if(!T || T.state!=="running") return;
+        T.cur={ term:job.term, to:job.to };
+        emit();
+        var text=job.term;
+        return ZTW.api.requestTranslate(cfg(), text, T.src, job.to).then(function(res){
+          if(!T || T.state!=="running") return;
+          var val=String(res==null?"":res).trim();
+          if(val){ T.pending.push({ id:job.id, to:job.to, val:val }); T.ok++; }
+          else T.empty++;
+          /* 只统计真正送进接口的原文长度，与翻译页 srcChars 口径一致 */
+          ZTW.usage.add(text.length);
+        }).catch(function(err){
+          if(!T || T.state!=="running") return;
+          T.fails.push({ to:job.to, term:text, msg:String((err&&err.message)||err) });
+          /* 前几条全失败通常是凭据 / 网络问题，直接停下避免白刷额度 */
+          if(!T.ok && T.fails.length>=3) T.stopReason="error";
+        }).then(function(){
+          if(!T || T.state!=="running") return;
+          T.done++;
+          /* 后台运行：每 PERSIST_EVERY 条落一次盘，意外刷新页面也尽量少丢；
+             任务结束 / 停止时由 finish() 强制落盘并重绘一次 */
+          if(T.done%PERSIST_EVERY===0) persist();
+          emit();
+        });
+      }
     }).then(function(){
       if(!T || T.state!=="running") return;
-      T.done++;
-      /* 后台运行：每 PERSIST_EVERY 条落一次盘，意外刷新页面也尽量少丢；
-         任务结束 / 停止时由 finish() 强制落盘并重绘一次 */
-      if(T.done%PERSIST_EVERY===0) persist();
-      emit();
-      if(!T.stopReason && T.done<T.total) setTimeout(step, T.gap>0?T.gap:30);
-      else finish();
+      finish();
     });
   }
 
@@ -6158,7 +6237,7 @@ ZTW.mtTask = (function(){
     T={ state:"running", kind:"glossary", title:"术语库一键翻译", unit:"条",
         total:jobs.length, done:0, ok:0, empty:0, fails:[], pending:[], summary:"",
         stopReason:"", src:opt.src, cur:null, jobs:jobs,
-        gap:Math.max(0, Number(c.reqInterval)||0), startedAt:Date.now(),
+        gap:Math.max(0, Number(c.reqInterval)||0), limit:ZTW.util.threadsOf(c), startedAt:Date.now(),
         onFinish:opt.onFinish||null };
     hidden=false;
     emit();
