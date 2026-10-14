@@ -51,6 +51,7 @@ function main() {
     'localStorage.setItem("ztw_rules",{',
     'localStorage.setItem("ztw_config",{',
     'localStorage.setItem("ztw_ts_gen_log",[',
+    'localStorage.setItem("ztw_excel_gen_log",[',
   ];
   for (const lit of dataLiterals) {
     ok("源码不含预置数据字面量 " + lit.slice(0, 34) + "…", html.indexOf(lit) < 0);
@@ -94,8 +95,8 @@ function main() {
   console.log("\n[2] 页签");
   const tabs = Array.from(doc.querySelectorAll('nav.tabs button[data-tab]'))
     .map((b) => b.getAttribute("data-tab"));
-  eq("页签数量", tabs.length, 6);
-  eq("页签顺序", tabs.join(","), "config,translate,glossary,rules,ts,help");
+  eq("页签数量", tabs.length, 7);
+  eq("页签顺序", tabs.join(","), "config,translate,glossary,rules,ts,excel,help");
 
   /* ---------------------------------------------------------------- *
    * [3] 术语库 / 规则库：数据只进 localStorage
@@ -162,7 +163,7 @@ function main() {
      版本更新记录整节移出帮助页，改由仓库 CHANGELOG.md 维护。 */
   ok("帮助页为面向使用者的手册（功能概述 → 注意事项）",
     !!helpSrc && /## 一、功能概述/.test(helpSrc.textContent)
-    && /## 十、注意事项/.test(helpSrc.textContent));
+    && /## 十一、注意事项/.test(helpSrc.textContent));
   ok("帮助页不再包含「更新记录」（版本历史移至仓库 CHANGELOG.md）",
     !!helpSrc && !/更新记录/.test(helpSrc.textContent));
   ok("帮助页不含开发者向内容（接口 / 跨域 / 签名等）",
